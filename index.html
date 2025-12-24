@@ -166,6 +166,9 @@ h2{font-size:18px;margin:24px 0 8px}
     padding:10px 8px;
   }
 }
+
+/* 小提示：用 display:none 隱藏區塊 */
+.hidden{display:none !important;}
 </style>
 </head>
 
@@ -199,6 +202,7 @@ h2{font-size:18px;margin:24px 0 8px}
       <option value="XL">XL</option>
     </select>
   </div>
+
   <div class="field">
     <label>澆口系統</label>
     <select id="gate">
@@ -206,11 +210,23 @@ h2{font-size:18px;margin:24px 0 8px}
       <option value="hot" selected>熱澆道</option>
     </select>
   </div>
+
+  <!-- ✅ 新增：Hot 時才顯示「熱澆道數量」 -->
+  <div class="field" id="hotQtyWrap">
+    <label>熱澆道數量（組）</label>
+    <select id="hotQty">
+      <option value="1" selected>1</option>
+      <option value="2">2</option>
+      <option value="3">3</option>
+      <option value="4">4</option>
+    </select>
+  </div>
+
   <div class="field">
     <label>頂針板厚度 (mm)</label>
     <select id="epT">
-      <option>20</option><option>25</option><option selected>35</option>
-      <option>40</option><option>45</option>
+      <option>20</option><option>25</option><option>30</option>
+      <option selected>35</option><option>40</option><option>45</option>
     </select>
   </div>
 </div>
@@ -252,7 +268,7 @@ h2{font-size:18px;margin:24px 0 8px}
 </div>
 
 <script>
-const density=7.85;
+const density=7.85; // g/cm3
 
 const P={
   edge:{S:20,M:30,L:40,XL:50},
@@ -261,8 +277,14 @@ const P={
   hotMin:{S:300,M:400,L:500,XL:580}
 };
 
-function vol(l,w,t){return Math.round(l*w*t/1000)}
-function kg(v){return Math.round(v*density/1000)}
+function vol(l,w,t){ return Math.round(l*w*t/1000); }         // mm^3 -> cm^3
+function kg(v){ return Math.round(v*density/1000); }          // cm^3 * g/cm^3 -> kg (rounded)
+
+// ✅ Hot 顯示邏輯
+function syncHotUI(){
+  const isHot = (gateEl.value === "hot");
+  hotQtyWrap.classList.toggle("hidden", !isHot);
+}
 
 function calc(){
   const Lp=+LpEl.value, Wp=+WpEl.value, Hp=+HpEl.value;
@@ -270,60 +292,90 @@ function calc(){
   const gate=gateEl.value;
   const ep=+epTEl.value;
 
+  // ✅ Hot 數量（只有 hot 才讀，cold 直接當 0）
+  const hotQty = (gate==="hot") ? (+hotQtyEl.value || 1) : 0;
+
   const Lm=Lp+2*P.edge[cls];
   const Wm=Wp+2*P.edge[cls];
   const Wcl=Wm+2*P.clamp[cls];
 
   const Wins=Wp+2*P.insert[cls];
-  const Wneed=(gate==="hot")?Math.max(Wins,P.hotMin[cls]):Wins;
+  const Wneed=(gate==="hot") ? Math.max(Wins,P.hotMin[cls]) : Wins;
 
-  const legW=Math.round((Wm-Wneed)/2);
-  const A_legH=(gate==="hot")?70:0;
+  const legW=Math.max(0, Math.round((Wm-Wneed)/2));
+  const A_legH=(gate==="hot") ? 70 : 0;
 
   diagram.innerHTML=`
     <div class="block clamp">上封頂板<br><small>W=${Wcl}</small></div>
-    ${gate==="hot"?`
+
+    ${gate==="hot" ? `
     <div class="row">
       <div class="leg">腳</div>
-      <div class="centerBox hot">熱澆道<br>W=${Wneed}</div>
+      <div class="centerBox hot">熱澆道<br>W_need=${Wneed}｜數量=${hotQty}</div>
       <div class="leg">腳</div>
-    </div>`:""}
+    </div>` : ""}
+
     <div class="block aPlate">母模板 A<br><small>W=${Wm}</small>
       <div class="insertA">模仁區域（示意） ${Wins}×${Wins}</div>
     </div>
+
     <div class="block bPlate">公模板 B<br><small>W=${Wm}</small>
       <div class="insertB">模仁區域（示意） ${Wins}×${Wins}</div>
     </div>
+
     <div class="row">
       <div class="leg">腳</div>
       <div class="centerBox eject">上/下頂針板<br>W=${Wneed}</div>
       <div class="leg">腳</div>
     </div>
+
     <div class="block clamp">下封頂板<br><small>W=${Wcl}</small></div>
   `;
 
-  const bom=[
-    ["上封頂板",`${Lm}×${Wcl}×50`,1,vol(Lm,Wcl,50)],
-    ["母模板 A",`${Lm}×${Wm}×${Hp+134}`,1,vol(Lm,Wm,Hp+134)],
-    ["公模板 B",`${Lm}×${Wm}×${Hp*2+231}`,1,vol(Lm,Wm,Hp*2+231)],
-    ["公模腳 (B)",`${Lm}×${legW}×108`,2,vol(Lm,legW,108)],
-    ["上頂針板",`${Lm}×${Wneed}×${ep}`,1,vol(Lm,Wneed,ep)],
-    ["下頂針板",`${Lm}×${Wneed}×${ep}`,1,vol(Lm,Wneed,ep)],
-    ["下封頂板",`${Lm}×${Wcl}×50`,1,vol(Lm,Wcl,50)]
-  ];
+  // ===== BOM =====
+  // 鋼材：照原邏輯計；熱澆道本體是外購件，所以 BOM 只顯示「數量」，重量/體積=0
+  const bom=[];
+
+  bom.push(["上封頂板",`${Lm}×${Wcl}×50`,1,vol(Lm,Wcl,50)]);
+
+  // ✅ 新增：熱澆道（組）顯示在 BOM（不納入重量/體積）
+  if(gate==="hot"){
+    bom.push(["熱澆道（組）",`-`,hotQty,0]);
+  }
+
+  // 這兩列保留你目前畫面邏輯（示意）
+  bom.push(["母模板 A（含Hp+加工餘量）",`${Lm}×${Wm}×${Hp+134}`,1,vol(Lm,Wm,Hp+134)]);
+  bom.push(["公模板 B（含Hp+加工餘量）",`${Lm}×${Wm}×${Hp*2+231}`,1,vol(Lm,Wm,Hp*2+231)]);
+
+  // Hot 時 A 70mm 空間鋼材（如果你要也進 BOM，可取消註解）
+  // if(gate==="hot"){
+  //   bom.push(["母模腳（A，側框｜固定70）",`${Lm}×${legW}×${A_legH}`,2,vol(Lm,legW,A_legH)*2]);
+  // }
+
+  bom.push(["公模腳 (B，側框）",`${Lm}×${legW}×108`,2,vol(Lm,legW,108)*2]);
+  bom.push(["上頂針板（中間）",`${Lm}×${Wneed}×${ep}`,1,vol(Lm,Wneed,ep)]);
+  bom.push(["下頂針板（中間）",`${Lm}×${Wneed}×${ep}`,1,vol(Lm,Wneed,ep)]);
+  bom.push(["下封頂板",`${Lm}×${Wcl}×50`,1,vol(Lm,Wcl,50)]);
 
   bomBody.innerHTML="";
-  let vs=0,ws=0;
+  let vs=0, ws=0;
+
   bom.forEach(r=>{
-    const w=kg(r[3]);
-    vs+=r[3]; ws+=w;
-    bomBody.innerHTML+=`<tr>
-      <td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td>
-      <td>${r[3]}</td><td>${w}</td>
+    const v=r[3] || 0;
+    const w=kg(v);
+    vs += v;
+    ws += w;
+    bomBody.innerHTML += `<tr>
+      <td>${r[0]}</td>
+      <td>${r[1]}</td>
+      <td>${r[2]}</td>
+      <td>${v}</td>
+      <td>${w}</td>
     </tr>`;
   });
-  vSum.textContent=vs;
-  wSum.textContent=ws;
+
+  vSum.textContent = vs;
+  wSum.textContent = ws;
 }
 
 const LpEl=document.getElementById("Lp");
@@ -331,8 +383,19 @@ const WpEl=document.getElementById("Wp");
 const HpEl=document.getElementById("Hp");
 const clsEl=document.getElementById("cls");
 const gateEl=document.getElementById("gate");
+const hotQtyWrap=document.getElementById("hotQtyWrap");
+const hotQtyEl=document.getElementById("hotQty");
 const epTEl=document.getElementById("epT");
 
+gateEl.addEventListener("change", ()=>{ syncHotUI(); calc(); });
+hotQtyEl.addEventListener("change", calc);
+clsEl.addEventListener("change", calc);
+LpEl.addEventListener("input", calc);
+WpEl.addEventListener("input", calc);
+HpEl.addEventListener("input", calc);
+epTEl.addEventListener("change", calc);
+
+syncHotUI();
 calc();
 </script>
 </body>
